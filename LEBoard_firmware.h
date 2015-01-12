@@ -1,35 +1,7 @@
 #ifndef _AUTOMATION_IO_H_
 #define _AUTOMATION_IO_H_
-/*
- * Copyright 2013, Broadcom Corporation
- * All Rights Reserved.
- *
- * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
- * the contents of this file may not be disclosed to third parties, copied
- * or duplicated in any form, in whole or in part, without the prior
- * written permission of Broadcom Corporation.
- */
-
-/** @file
-*
-* This file provides definitions and function prototypes for the BLE
-* Automation IO profile, service, application.
-*
-* Refer to Bluetooth SIG Automation IO Profile 0.9 and Automation IO Service
-* 0.9 specifications for details.
-*
-*/
 
 #include "bleprofile.h"
-
-//////////////////////////////////////////////////////////////////////////////
-//                      public data type definition.
-//////////////////////////////////////////////////////////////////////////////
-#ifdef _WIN32
-#include <pshpack1.h>
-#endif
-// GHS syntax.
-#pragma pack(1)
 
 #define AIO_HANDLE_NUM_MAX     5 //non notification/indication handle
 #define AIO_NOT_HANDLE_NUM_MAX 5 //notification/indication handle
@@ -82,15 +54,6 @@ typedef PACKED struct
     UINT16  cli_cha_desc[AIO_NOT_HANDLE_NUM_MAX];
 }  BLEAIO_HOSTINFO;
 
-#ifdef _WIN32
-#include <poppack.h>
-#endif
-// GHS syntax.
-#pragma pack()
-
-//////////////////////////////////////////////////////////////////////////////
-//                      public interface declaration
-//////////////////////////////////////////////////////////////////////////////
 
 void bleaio_Create(void);
 

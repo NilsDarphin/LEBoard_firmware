@@ -1,45 +1,3 @@
-/*
- * Copyright 2013, Broadcom Corporation
- * All Rights Reserved.
- *
- * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
- * the contents of this file may not be disclosed to third parties, copied
- * or duplicated in any form, in whole or in part, without the prior
- * written permission of Broadcom Corporation.
- */
-
-/** @file
-*
-* This file implements the BLE Automation IO profile, service, application.
-*
-* Refer to Bluetooth SIG Automation IO Profile 0.9 and Automation IO Service
-* 0.9 specifications for details.
-*
-* The sample Automation IO device implements digital and analog input and
-* output signals.  During initialization the app registers with LE stack
-* to receive various notifications including bonding complete, connection
-* status change and peer write.  When device is successfully bonded
-* application saves peer's Bluetooth Device address to the NVRAM.  Bonded
-* device can write into client configuration descriptor for input automation
-* IO characteristics to receive notification or indication when corresponding
-* signal is changed.  That information is also save in the NVRAM.
-* Simulation allows to send indication or notification on timer or GPIO
-* triggering.
-*
-* Features demonstrated
-*  - GATT database and Device configuration initialization
-*  - Registration with LE stack for various events
-*  - NVRAM read/write operation
-*  - GPIO interrupts processing
-*  - Processing control and data from the client
-*  - Sending data to the client
-*
-* To demonstrate the app, work through the following steps.
-* 1. Plug the WICED eval board into your computer
-* 2. Build and download the application (to the WICED board)
-* 3. Pair with a client
-*
-*/
 #include "platform.h"
 #include "bleprofile.h"
 #include "LEBoard_firmware.h"
@@ -48,33 +6,23 @@
 #include "stdio.h"
 #include "pwm.h"
 #include "aclk.h"
+#include "devicelpm.h"
 
 /******************************************************
  *                    Constants
  ******************************************************/
 
 //This GPIO definition is only used for test mode
-#ifdef BLE_P2
 #define DIN0        0
 #define DIN1        2
-#define DOUT0       14
-#define DOUT1       29  // This dummy
+#define DOUT0       8
+#define DOUT1       27  // This dummy
 #define DIN_BYTE    1   // number of bytes in aggregate input
 #define AIN_BYTE    4   // number of bytes in aggregate input
-#else
-#define DIN0        2
-#define DIN1        3
-#define DOUT0       26
-#define DOUT1       27
-#define DIN_BYTE    1 //number of bytes in aggregate input
-#define AIN_BYTE    4 //number of bytes in aggregate input
-#endif
 
 #define DIGITAL     0
 #define ANALOG      1
 
-//#define DUMMY_TRIGGER
-#define PWM_SUPPORT
 #define ANALOG_OUTPUT_TO_INPUT
 
 #ifdef DUMMY_TRIGGER
@@ -83,13 +31,11 @@
 #define UUID_CHARACTERISTIC_ANALOG_INPUT_TRIGGER  (UUID_SERVICE_AUTOMATION_IO_TRIGGER + 0x02)
 #endif
 
-#ifdef PWM_SUPPORT
 #define AIO_PWM1       26
 #define AIO_PWM2       28
 #define AIO_PWM3       -1 //28
 #define AIO_PWM_BASE   26
-#define AIO_PWM_STEPS 500
-#endif
+#define AIO_PWM_STEPS 1000
 
 /******************************************************
  *               Function Declarations
@@ -118,15 +64,18 @@ static void  bleaio_IndicationConf( void );
 extern void  bleprofile_regAppEvtHandler( BLECM_APP_EVT_ENUM idx, BLECM_NO_PARAM_FUNC func );
 static void  bleprofile_setidletimer_withNotification(void);
 extern void  bleprofile_appTimerCb( UINT32 arg );
-#ifdef PWM_SUPPORT
+
 static void  bleaio_pwm_init( UINT8 gpio, UINT8 clock, UINT16 total_step, UINT16 toggle_step );
 static void  bleaio_pwm_set( UINT8 gpio, UINT16 total_step, UINT16 toggle_step );
 static void  bleaio_pwm_off( UINT8 gpio );
-#endif
+
 
 /******************************************************
  *               Variables Definitions
  ******************************************************/
+
+
+
 
 const UINT8 bleaio_db_data[]=
 {
@@ -151,7 +100,7 @@ const UINT8 bleaio_db_data[]=
     // Handle 0x21:  Automation IO
     PRIMARY_SERVICE_UUID16 (0x0021, UUID_SERVICE_AUTOMATION_IO),
 
-    // Handle 0x22: characteristic Digital Input, handle 0x2a characteristic value
+    // Handle 0x22: Characteristic Digital Input, handle 0x2a characteristic value
     CHARACTERISTIC_UUID16 (0x0022, 0x0023, UUID_CHARACTERISTIC_DIGITAL_INPUT,
     LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY | LEGATTDB_CHAR_PROP_INDICATE,
     LEGATTDB_PERM_READABLE, 1),
@@ -162,7 +111,7 @@ const UINT8 bleaio_db_data[]=
     LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 2),
     0x00, 0x00,
 
-    // Handle 0x25: Number of Digitials Descriptor
+    // Handle 0x25: Number of Digitals Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0025, UUID_DESCRIPTOR_NUMBER_OF_DIGITALS, LEGATTDB_PERM_READABLE, 1),
     0x02,                       // 2 digital input
 
@@ -171,7 +120,7 @@ const UINT8 bleaio_db_data[]=
     LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 4),
     0x00, 0x00, 0x00, 0x00,
 
-    // Handle 0x27: Characteristic Presentation Format Descriptor
+    // Handle 0x27: Presentation Format Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0027, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT,
     LEGATTDB_PERM_READABLE, 7),
     0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, // 2bit
@@ -180,17 +129,17 @@ const UINT8 bleaio_db_data[]=
     CHAR_DESCRIPTOR_UUID16 (0x0028, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
     'D','I','0','0',
 
-    // Handle 0x32: characteristic Digital Output, handle 0x33 characteristic value
+    // Handle 0x32: Characteristic Digital Output, handle 0x33 characteristic value
     CHARACTERISTIC_UUID16_WRITABLE (0x0032, 0x0033, UUID_CHARACTERISTIC_DIGITAL_OUTPUT,
     LEGATTDB_CHAR_PROP_WRITE| LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
     LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ,  1),
     0x00,
 
-    // Handle 0x34: Number of Digitials Descriptor
+    // Handle 0x34: Number of Digitals Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0034, UUID_DESCRIPTOR_NUMBER_OF_DIGITALS, LEGATTDB_PERM_READABLE, 1),
     0x02,                       // 2 digital output
 
-    // Handle 0x37: Characteristic Presentation Format Descriptor
+    // Handle 0x37: Presentation Format Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0037, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
     0x03,0x00,0x00,0x00,0x01,0x00,0x00, // 4bit
 
@@ -198,7 +147,7 @@ const UINT8 bleaio_db_data[]=
     CHAR_DESCRIPTOR_UUID16( 0x0038, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
     'D','O','0','0',
 
-    // Handle 0x42: characteristic Analog Input, handle 0x43 characteristic value
+    // Handle 0x42: Characteristic Analog Input, handle 0x43 characteristic value
     CHARACTERISTIC_UUID16 (0x0042, 0x0043, UUID_CHARACTERISTIC_ANALOG_INPUT,
     LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY | LEGATTDB_CHAR_PROP_INDICATE,
     LEGATTDB_PERM_READABLE, 2),
@@ -214,7 +163,7 @@ const UINT8 bleaio_db_data[]=
     LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 4),
     0x00, 0x00, 0x00, 0x00,     //
 
-    // Handle 0x47: Characteristic Presentation Format Descriptor
+    // Handle 0x47: Presentation Format Descriptor
     CHAR_DESCRIPTOR_UUID16( 0x0047, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
     0x06,0x00,0x00,0x00,0x01,0x00,0x00, //uint16
 
@@ -222,7 +171,7 @@ const UINT8 bleaio_db_data[]=
     CHAR_DESCRIPTOR_UUID16( 0x0048, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
     'A','I','0','0',
 
-    // Handle 0x52: characteristic Digital Input, handle 0x53 characteristic value
+    // Handle 0x52: Characteristic Analog Input, handle 0x53 characteristic value
     CHARACTERISTIC_UUID16 (0x0052, 0x0053, UUID_CHARACTERISTIC_ANALOG_INPUT,
     LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY | LEGATTDB_CHAR_PROP_INDICATE,
     LEGATTDB_PERM_READABLE, 2),
@@ -238,7 +187,7 @@ const UINT8 bleaio_db_data[]=
     LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 4),
     0x00, 0x00, 0x00, 0x00,     //
 
-    // Handle 0x57: Characteristic Presentation Format Descriptor
+    // Handle 0x57: Presentation Format Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0057, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
     0x06,0x00,0x00,0x00,0x01,0x00,0x00, //uint16
 
@@ -246,76 +195,58 @@ const UINT8 bleaio_db_data[]=
     CHAR_DESCRIPTOR_UUID16 (0x0058, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
     'A','I','0','1',
 
-    // Handle 0x62: characteristic Analog Output, handle 0x63 characteristic value
-    CHARACTERISTIC_UUID16_WRITABLE (0x0062, 0x0063, UUID_CHARACTERISTIC_ANALOG_OUTPUT,
-    LEGATTDB_CHAR_PROP_WRITE| LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
-    LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 2),
+    // Handle 0x62: Characteristic Analog Input, handle 0x53 characteristic value
+    CHARACTERISTIC_UUID16 (0x0062, 0x0063, UUID_CHARACTERISTIC_ANALOG_INPUT,
+    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY | LEGATTDB_CHAR_PROP_INDICATE,
+    LEGATTDB_PERM_READABLE, 2),
     0x00, 0x00,
 
-    // Handle 0x67: Characteristic Presentation Format Descriptor
-    CHAR_DESCRIPTOR_UUID16 (0x0067, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT,LEGATTDB_PERM_READABLE, 7),
-    0x06,0x00,0x00,0x00,0x01,0x00,0x00, // uint16
+    // Handle 0x64: Client Characteristic Descriptor
+    CHAR_DESCRIPTOR_UUID16_WRITABLE (0x0064, UUID_DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
+    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 2),
+    0x00, 0x00,                 // write 1 will trigger notification, 2 - indication
+
+    // Handle 0x66: Trigger Settings Descriptor
+    CHAR_DESCRIPTOR_UUID16_WRITABLE (0x0066, UUID_DESCRIPTOR_TRIGGER_SETTING,
+    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 4),
+    0x00, 0x00, 0x00, 0x00,     //
+
+    // Handle 0x67: Presentation Format Descriptor
+    CHAR_DESCRIPTOR_UUID16 (0x0067, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
+    0x06,0x00,0x00,0x00,0x01,0x00,0x00, //uint16
 
     // Handle 0x68: User Description Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0068, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
-    'A','O','0','0',
+    'A','I','0','2',
 
-    // Handle 0x72: characteristic Analog Output, handle 0x73 characteristic value
+    // Handle 0x72: Characteristic Analog Output, handle 0x73 characteristic value
     CHARACTERISTIC_UUID16_WRITABLE (0x0072, 0x0073, UUID_CHARACTERISTIC_ANALOG_OUTPUT,
     LEGATTDB_CHAR_PROP_WRITE| LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
     LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 2),
     0x00, 0x00,
 
-    // Handle 0x77: Characteristic Presentation Format Descriptor
-    CHAR_DESCRIPTOR_UUID16 (0x0077, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
+    // Handle 0x77: Presentation Format Descriptor
+    CHAR_DESCRIPTOR_UUID16 (0x0077, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT,LEGATTDB_PERM_READABLE, 7),
     0x06,0x00,0x00,0x00,0x01,0x00,0x00, // uint16
 
     // Handle 0x78: User Description Descriptor
     CHAR_DESCRIPTOR_UUID16 (0x0078, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
-    'A','O','0','1',
+    'A','O','0','0',
 
-    // Handle 0x82: characteristic Aggregate Input, handle 0x83 characteristic value
-    CHARACTERISTIC_UUID16 (0x0082, 0x0083, UUID_CHARACTERISTIC_AGGREGATE_INPUT,
-    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_NOTIFY | LEGATTDB_CHAR_PROP_INDICATE,
-    LEGATTDB_PERM_READABLE, 5),
-    0x00, 0x00, 0x00, 0x00, 0x00,
+    // Handle 0x82: Characteristic Analog Output, handle 0x83 characteristic value
+    CHARACTERISTIC_UUID16_WRITABLE (0x0082, 0x0083, UUID_CHARACTERISTIC_ANALOG_OUTPUT,
+    LEGATTDB_CHAR_PROP_WRITE| LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
+    LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 2),
+    0x00, 0x00,
 
-    // Handle 0x84: Client Characteristic Descriptor
-    CHAR_DESCRIPTOR_UUID16_WRITABLE (0x0084, UUID_DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
-    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD |LEGATTDB_PERM_WRITE_REQ, 2),
-
-    0x00, 0x00,                 // write 1 will trigger notification, 2 - indication
-
-    // Handle 0x87: Characteristic Presentation Format Descriptor
-    CHAR_DESCRIPTOR_UUID16( 0x0087, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
-    0x19, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, //utf8s
+    // Handle 0x87: Presentation Format Descriptor
+    CHAR_DESCRIPTOR_UUID16 (0x0087, UUID_DESCRIPTOR_CHARACTERISTIC_PRESENTATION_FORMAT, LEGATTDB_PERM_READABLE, 7),
+    0x06,0x00,0x00,0x00,0x01,0x00,0x00, // uint16
 
     // Handle 0x88: User Description Descriptor
-    CHAR_DESCRIPTOR_UUID16( 0x0088, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
-    'A','g','g','I',
+    CHAR_DESCRIPTOR_UUID16 (0x0088, UUID_DESCRIPTOR_CHARACTERISTIC_USER_DESCRIPTION, LEGATTDB_PERM_READABLE, 4),
+    'A','O','0','1',
 
-    #ifdef DUMMY_TRIGGER
-    // Dummy trigger
-    PRIMARY_SERVICE_UUID16 (0x0091, UUID_SERVICE_AUTOMATION_IO_TRIGGER),
-
-    // Handle 0x92: characteristic Dummy Digital Input Trigger, handle 0x93 characteristic value
-    CHARACTERISTIC_UUID16_WRITABLE (0x0092, 0x0093, UUID_CHARACTERISTIC_DIGITAL_INPUT_TRIGGER,
-    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_WRITE | LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
-    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 4),
-    0x00, 0x00, 0x00, 0x00,     //
-
-    // Handle 0x94: characteristic Dummy Analog Input Trigger, handle 0x95 characteristic value
-    CHARACTERISTIC_UUID16_WRITABLE (0x0094, 0x0095, UUID_CHARACTERISTIC_ANALOG_INPUT_TRIGGER,
-    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_WRITE | LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
-    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 4),
-    0x00, 0x00, 0x00, 0x00,     //
-
-    // Handle 0x96: characteristic Dummy Digital Input Trigger, handle 0x97 characteristic value
-    CHARACTERISTIC_UUID16_WRITABLE (0x0096, 0x0097, UUID_CHARACTERISTIC_ANALOG_INPUT_TRIGGER,
-    LEGATTDB_CHAR_PROP_READ | LEGATTDB_CHAR_PROP_WRITE | LEGATTDB_CHAR_PROP_WRITE_NO_RESPONSE,
-    LEGATTDB_PERM_READABLE | LEGATTDB_PERM_WRITE_CMD | LEGATTDB_PERM_WRITE_REQ, 4),
-    0x00, 0x00, 0x00, 0x00,     //
-    #endif
     // Handle 0xa1: Battery service
     PRIMARY_SERVICE_UUID16 (0x00a1, UUID_SERVICE_BATTERY),
 
@@ -330,7 +261,7 @@ const UINT16 bleaio_db_size = sizeof( bleaio_db_data );
 const BLE_PROFILE_CFG bleaio_cfg =
 {
     /*.fine_timer_interval            =*/ 1000, //ms
-    /*.default_adv                    =*/ 4,    // HIGH_UNDIRECTED_DISCOVERABLE
+    /*.default_adv                    =*/ MANDATORY_DISCOVERABLE,    // HIGH_UNDIRECTED_DISCOVERABLE
     /*.button_adv_toggle              =*/ 0,    // pairing button make adv toggle (if 1) or always on (if 0)
     /*.high_undirect_adv_interval     =*/ 32,   // slots
     /*.low_undirect_adv_interval      =*/ 2048, // slots
@@ -384,7 +315,6 @@ const BLE_PROFILE_PUART_CFG bleaio_puart_cfg =
     /*.rxpin      =*/ 33,       // GPIO pin number
 };
 
-#ifdef BLE_P2
 const BLE_PROFILE_GPIO_CFG bleaio_gpio_cfg =
 {
     /*.gpio_pin =*/
@@ -392,11 +322,7 @@ const BLE_PROFILE_GPIO_CFG bleaio_gpio_cfg =
         GPIO_PIN_WP,      // This need to be used to enable/disable NVRAM write protect
         GPIO_PIN_BATTERY, // Battery monitoring GPIO. When it is lower than particular level, it will give notification to the application.
         DIN0, DIN1, DOUT0, DOUT1,
-        #ifdef PWM_SUPPORT
         AIO_PWM1, AIO_PWM2, AIO_PWM3,
-        #else
-        -1, -1, -1,
-        #endif
         -1, -1, -1, -1, -1, -1, -1
     },
     /*.gpio_flag =*/
@@ -407,41 +333,17 @@ const BLE_PROFILE_GPIO_CFG bleaio_gpio_cfg =
         GPIO_INPUT | GPIO_INIT_LOW | GPIO_INT,
         GPIO_OUTPUT | GPIO_INIT_HIGH,
         GPIO_OUTPUT | GPIO_INIT_HIGH,
-        #ifdef PWM_SUPPORT
         GPIO_OUTPUT | GPIO_INIT_HIGH,
         GPIO_OUTPUT | GPIO_INIT_HIGH,
         GPIO_OUTPUT | GPIO_INIT_HIGH,
-        #else
-        0, 0, 0,
-        #endif
         0, 0, 0, 0, 0, 0, 0
     }
 };
-#else
-const BLE_PROFILE_GPIO_CFG bleaio_gpio_cfg =
-{
-    /*.gpio_pin =*/
-    {
-        31, 14, 15, DIN0, DIN1, DOUT0, DOUT1, -1, -1, -1, -1, -1, -1, -1, -1, -1
-    },
-    /*.gpio_flag =*/
-    {
-        GPIO_OUTPUT | GPIO_INIT_LOW|GPIO_WP,
-        GPIO_INPUT | GPIO_INIT_HIGH | GPIO_BUTTON | GPIO_INT,
-        GPIO_INPUT | GPIO_INIT_LOW | GPIO_BAT,
-        GPIO_INPUT | GPIO_INIT_HIGH, //this is set up with IntInit()
-        GPIO_INPUT | GPIO_INIT_HIGH,
-        GPIO_OUTPUT | GPIO_INIT_HIGH,
-        GPIO_OUTPUT | GPIO_INIT_HIGH,
-        0, 0, 0, 0, 0, 0, 0, 0, 0
-    },
-};
-#endif
 
 
 BLE_AIO_GATT_CFG bleaio_gatt_cfg =
 {
-    /*.hdl  =*/ {0x33, 0x63, 0x73, 0x0, 0x00},
+    /*.hdl  =*/ {0x33, 0x73, 0x83, 0x00, 0x00},
     /*.serv =*/ {UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO, 0, 0},
     /*.cha  =*/ {UUID_CHARACTERISTIC_DIGITAL_OUTPUT, UUID_CHARACTERISTIC_ANALOG_OUTPUT, UUID_CHARACTERISTIC_ANALOG_OUTPUT, 0, 0}
 };
@@ -452,14 +354,14 @@ BLE_AIO_NOT_GATT_CFG bleaio_not_gatt_cfg =
     /*.tick    =*/ {0, 0, 0, 0, 0},  // [AIO_NOT_HANDLE_NUM_MAX];
     /*.timeout =*/ {0, 0, 0, 0, 0},
     /*.count   =*/ {0, 0, 0, 0, 0},
-    /*.hdl	=*/ {0x23, 0x43, 0x53, 0x83, 0},
-    /*.cl_hdl  =*/ {0x24, 0x44, 0x54, 0x84, 0},
+    /*.hdl	=*/ {0x23, 0x53, 0x63, 0, 0},
+    /*.cl_hdl  =*/ {0x24, 0x44, 0x54, 0, 0},
     /*.tr_hdl  =*/ {0x26, 0x46, 0x56, 0, 0},
     /*.tr2_hdl =*/ {0x93, 0x95, 0x97, 0, 0},
     /*.serv    =*/ {UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO,
-                    UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO, 0},
+                    UUID_SERVICE_AUTOMATION_IO, 0, 0},
     /*.cha     =*/ {UUID_CHARACTERISTIC_DIGITAL_INPUT, UUID_CHARACTERISTIC_ANALOG_INPUT,
-                    UUID_CHARACTERISTIC_ANALOG_INPUT, UUID_CHARACTERISTIC_AGGREGATE_INPUT, 0}
+                    UUID_CHARACTERISTIC_ANALOG_INPUT, 0, 0}
 };
 
 UINT32 	bleaio_apptimer_count		= 0;
@@ -478,9 +380,19 @@ BLEAIO_HOSTINFO bleaio_hostinfo;
 
 APPLICATION_INIT()
 {
-    bleapp_set_cfg((UINT8 *)bleaio_db_data, bleaio_db_size, (void *)&bleaio_cfg,
-                   (void *)&bleaio_puart_cfg, (void *)&bleaio_gpio_cfg, bleaio_Create);
-    bleapp_trace_enable = 1;
+    bleapp_set_cfg((UINT8 *)bleaio_db_data,
+                   bleaio_db_size,
+                   (void *)&bleaio_cfg,
+                   (void *)&bleaio_puart_cfg,
+                   (void *)&bleaio_gpio_cfg,
+                   bleaio_Create);
+    bleapp_trace_enable = BLE_TRACE_UART_HCI;
+}
+
+UINT32 bleautoio_queryPowersave(LowPowerModePollType type, UINT32 context)
+{
+    // prevent sleep with return 0
+    return 0;
 }
 
 void bleaio_Create(void)
@@ -493,6 +405,16 @@ void bleaio_Create(void)
 
     // dump the database to debug uart.
     legattdb_dumpDb();
+
+    if(!bleaio_cfg.powersave_timeout)
+    {
+        devlpm_init();
+
+        devlpm_enableWakeFrom(DEV_LPM_WAKE_SOURCE_GPIO);
+    }
+
+    devlpm_registerForLowPowerQueries(
+        (DeviceLpmQueriableMethodCallback) bleautoio_queryPowersave, 0);
 
     bleprofile_Init(bleprofile_p_cfg);
     bleprofile_GPIOInit(bleprofile_gpio_p_cfg);
@@ -519,7 +441,6 @@ void bleaio_Create(void)
     bleprofile_regTimerCb(bleaio_appFineTimerCb, bleaio_appTimerCb);
     bleprofile_StartTimer();
 
-#ifdef PWM_SUPPORT
     //This is only for PMU_CLK
     // LHL_CLK's base frequency is 125 Hz
     aclk_configure(24000000, ACLK1, ACLK_FREQ_24_MHZ); // base clock 23.46 kHz, use 0x200-0x300 makes 46.78 kHz
@@ -527,7 +448,6 @@ void bleaio_Create(void)
     bleaio_pwm_init(AIO_PWM1,PMU_CLK,AIO_PWM_STEPS, 0); //PMU_CLK or LHL_CLK
     bleaio_pwm_init(AIO_PWM2,PMU_CLK,AIO_PWM_STEPS, 0);
     bleaio_pwm_init(AIO_PWM3,PMU_CLK,AIO_PWM_STEPS, 0);
-#endif
 
     bleaio_connDown();
 }
@@ -552,18 +472,6 @@ void bleaio_Timeout(UINT32 count)
     if (bleprofile_p_cfg->test_enable)
     {
         bleaio_checktimetrigger();
-
-#ifndef BLE_P2
-        if(count % 10 == 0)
-        {
-            bleaio_analoginput(0, (UINT16)count * 100); //analog input 0
-        }
-
-        if(count % 20 == 0)
-        {
-            bleaio_analoginput(1, (UINT16)count * 200); //analog input 1
-        }
-#endif
     }
 }
 
@@ -945,48 +853,6 @@ int bleaio_writeCb(LEGATTDB_ENTRY_HDR *p)
         }
     }
 
-#ifdef DUMMY_TRIGGER
-    if (bleprofile_p_cfg->test_enable)
-    {
-        //dummy trigger handle
-        for (i = 0; i < AIO_NOT_HANDLE_NUM_MAX; i++)
-        {
-            if ((bleaio_not_gatt_cfg.tr2_hdl[i]) &&
-                    ((bleaio_not_gatt_cfg.tr2_hdl[i]) == handle))
-            {
-                BLEPROFILE_DB_PDU db_tr_pdu;
-
-                bleprofile_ReadHandle(bleaio_not_gatt_cfg.tr2_hdl[i], &db_tr_pdu);
-                ble_tracen((char *)db_tr_pdu.pdu, db_tr_pdu.len);
-
-                // handle write
-                bleprofile_WriteHandle(bleaio_not_gatt_cfg.tr_hdl[i], &db_tr_pdu);
-                ble_tracen((char *)db_tr_pdu.pdu, db_tr_pdu.len);
-
-                //stop time trigger for all case
-                bleaio_stoptimetrigger(i);
-
-                //check trigger condition
-                if (db_tr_pdu.len)
-                {
-                    if (db_tr_pdu.pdu[0]  == AIO_NO_IND_TIME)
-                    {
-                        bleaio_not_gatt_cfg.tick[i] =
-                                db_tr_pdu.pdu[1]*60*60 + db_tr_pdu.pdu[2]*60 + db_tr_pdu.pdu[3];
-                        bleaio_not_gatt_cfg.timeout[i] = 0;
-                    }
-                    else if (db_tr_pdu.pdu[0]  == AIO_NO_IND_INTERVAL)
-                    {
-                        bleaio_not_gatt_cfg.tick[i] =
-                                db_tr_pdu.pdu[1]*60*60 + db_tr_pdu.pdu[2]*60 + db_tr_pdu.pdu[3];
-                        bleaio_not_gatt_cfg.timeout[i] = bleaio_not_gatt_cfg.tick[i];
-                    }
-                }
-            }
-        }
-    }
-#endif
-
     return 0;
 }
 
@@ -997,21 +863,12 @@ void bleaio_IntInit(void)
     memset(masks, 0x00, sizeof(UINT16)*GPIO_NUM_PORTS);
 
     // Make Input detects both edges
-#ifdef BLE_P2
     gpio_configurePin(DIN0 >> 4, DIN0 & 0x0F,
                       GPIO_INPUT_ENABLE | GPIO_PULL_DOWN | GPIO_EN_INT_BOTH_EDGE,
                       GPIO_PIN_OUTPUT_HIGH);
     gpio_configurePin(DIN1 >> 4, DIN1 & 0x0F,
                       GPIO_INPUT_ENABLE | GPIO_PULL_UP |GPIO_EN_INT_BOTH_EDGE,
                       GPIO_PIN_OUTPUT_HIGH);
-#else
-    gpio_configurePin(DIN0>>4, DIN0&0x0F,
-                      GPIO_INPUT_ENABLE|GPIO_PULL_UP|GPIO_EN_INT_BOTH_EDGE,
-                      GPIO_PIN_OUTPUT_HIGH);
-    gpio_configurePin(DIN1>>4, DIN1&0x0F,
-                      GPIO_INPUT_ENABLE|GPIO_PULL_UP|GPIO_EN_INT_BOTH_EDGE,
-                      GPIO_PIN_OUTPUT_HIGH);
-#endif
 
     // Interrupt setting
     masks[DIN0 >> 4] |= (1 << (DIN0 & 0x0F));
@@ -1028,6 +885,8 @@ void bleaio_IntCb(void *data)
     UINT8 pre_button = 0;
     int i;
 
+    ble_trace0("interrupt");
+
     //Debounce
     for (i = 0; i < 5; i++) //max delay here is 1ms
     {
@@ -1041,17 +900,12 @@ void bleaio_IntCb(void *data)
         if (gpio_getPinInput(DIN0 >> 4, DIN0 & 0x0F))
         {
             //add here if active high
-#ifdef BLE_P2
+
             //add here if active low
             button |= 0x01;
-#endif
         }
         else
         {
-#ifndef BLE_P2
-            //add here if active low
-            button |= 0x01;
-#endif
         }
 
         if (gpio_getPinInput(DIN1 >> 4, DIN1 & 0x0F))
@@ -1620,7 +1474,7 @@ void bleaio_output(UINT16 handle)
             {
                 BT_MEMCPY(&output, (char *)db_pdu.pdu, db_pdu.len);
                 ble_trace1("Digital output:%02x", output);
-                output = (~output)&(0x04|0x01); //change polarity
+                output = output&(0x04|0x01); //change polarity
 
                 gpio_setPinOutput(DOUT0 >> 4, DOUT0 & 0x0F, output & 0x01);
                 gpio_setPinOutput(DOUT1 >> 4, DOUT1 & 0x0F, (output & 0x04) >> 2);
@@ -1631,7 +1485,6 @@ void bleaio_output(UINT16 handle)
                 BT_MEMCPY(&output, (char *)db_pdu.pdu, db_pdu.len);
                 ble_trace1("Analog output:%d", output);
 
-#ifdef BLE_P2
                 //find index
                 {
                     int j;
@@ -1644,10 +1497,11 @@ void bleaio_output(UINT16 handle)
                             count++;
                         }
                     }
-#ifdef PWM_SUPPORT
                     {
                         UINT32 set_steps = ((UINT16)output) * AIO_PWM_STEPS / 0xFFFF;
                         UINT8 gpio;
+
+                        ble_trace1("count = %d", count);
 
                         if (count == 0)
                         {
@@ -1663,13 +1517,11 @@ void bleaio_output(UINT16 handle)
                         }
                         bleaio_pwm_set(gpio, AIO_PWM_STEPS, (UINT16)set_steps);
                     }
-#endif
 
 #ifdef ANALOG_OUTPUT_TO_INPUT
                     bleaio_analoginput(count, (UINT16)output);
 #endif
                 }
-#endif
             }
         }
     }
@@ -1688,7 +1540,6 @@ void bleaio_IndicationConf(void)
     }
 }
 
-#ifdef PWM_SUPPORT
 void bleaio_pwm_init(UINT8 gpio, UINT8 clock, UINT16 total_step, UINT16 toggle_step)
 {
     UINT16 init_value = 0x3FF - total_step;
@@ -1696,6 +1547,7 @@ void bleaio_pwm_init(UINT8 gpio, UINT8 clock, UINT16 total_step, UINT16 toggle_s
 
     // toggle_step / total_step will be the ducy cycle
 
+    pwm_setInversion(gpio - AIO_PWM_BASE, 1);
     pwm_start(gpio - AIO_PWM_BASE, clock,toggle_val,init_value);
 }
 
@@ -1714,7 +1566,6 @@ void bleaio_pwm_off(UINT8 gpio)
     // turn off PWM
     pwm_disableChannel(1 << (gpio - AIO_PWM_BASE));
 }
-#endif
 
 // Stop connection idle timer if it is running
 void bleprofile_StopConnIdleTimer(void)
