@@ -25,17 +25,15 @@
 
 #define ANALOG_OUTPUT_TO_INPUT
 
-#ifdef DUMMY_TRIGGER
-#define UUID_SERVICE_AUTOMATION_IO_TRIGGER        (UUID_SERVICE_AUTOMATION_IO + 0x0100)
-#define UUID_CHARACTERISTIC_DIGITAL_INPUT_TRIGGER (UUID_SERVICE_AUTOMATION_IO_TRIGGER + 0x01)
-#define UUID_CHARACTERISTIC_ANALOG_INPUT_TRIGGER  (UUID_SERVICE_AUTOMATION_IO_TRIGGER + 0x02)
-#endif
-
 #define AIO_PWM1       26
 #define AIO_PWM2       28
 #define AIO_PWM3       -1 //28
 #define AIO_PWM_BASE   26
 #define AIO_PWM_STEPS 1000
+
+#define AIO_ADC0
+#define AIO_ADC1
+#define AIO_ADC2
 
 /******************************************************
  *               Function Declarations
@@ -73,9 +71,6 @@ static void  bleaio_pwm_off( UINT8 gpio );
 /******************************************************
  *               Variables Definitions
  ******************************************************/
-
-
-
 
 const UINT8 bleaio_db_data[]=
 {
@@ -354,14 +349,14 @@ BLE_AIO_NOT_GATT_CFG bleaio_not_gatt_cfg =
     /*.tick    =*/ {0, 0, 0, 0, 0},  // [AIO_NOT_HANDLE_NUM_MAX];
     /*.timeout =*/ {0, 0, 0, 0, 0},
     /*.count   =*/ {0, 0, 0, 0, 0},
-    /*.hdl	=*/ {0x23, 0x53, 0x63, 0, 0},
-    /*.cl_hdl  =*/ {0x24, 0x44, 0x54, 0, 0},
-    /*.tr_hdl  =*/ {0x26, 0x46, 0x56, 0, 0},
-    /*.tr2_hdl =*/ {0x93, 0x95, 0x97, 0, 0},
+    /*.hdl	=*/ {0x23, 0x43, 0x53, 0x63, 0},
+    /*.cl_hdl  =*/ {0x24, 0x44, 0x54, 0x64, 0},
+    /*.tr_hdl  =*/ {0x26, 0x46, 0x56, 0x66, 0},
+    /*.tr2_hdl =*/ {0x93, 0x95, 0x97, 0x99, 0},
     /*.serv    =*/ {UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO,
-                    UUID_SERVICE_AUTOMATION_IO, 0, 0},
+                    UUID_SERVICE_AUTOMATION_IO, UUID_SERVICE_AUTOMATION_IO, 0},
     /*.cha     =*/ {UUID_CHARACTERISTIC_DIGITAL_INPUT, UUID_CHARACTERISTIC_ANALOG_INPUT,
-                    UUID_CHARACTERISTIC_ANALOG_INPUT, 0, 0}
+                    UUID_CHARACTERISTIC_ANALOG_INPUT, UUID_CHARACTERISTIC_ANALOG_INPUT, 0}
 };
 
 UINT32 	bleaio_apptimer_count		= 0;
@@ -419,6 +414,9 @@ void bleaio_Create(void)
     bleprofile_Init(bleprofile_p_cfg);
     bleprofile_GPIOInit(bleprofile_gpio_p_cfg);
 
+    // Initialize and configure the ADC driver
+    adc_config();
+
     bleaio_DBInit(); //load handle number
 
     // register connection up and connection down handler.
@@ -460,7 +458,7 @@ void bleaio_FakeUART(char *bpm_char, UINT32 count)
 
 void bleaio_Timeout(UINT32 count)
 {
-    //ble_trace1("Normaltimer:%d", count);
+    ble_trace1("Normaltimer:%d", count);
 
     if (bleaio_bat_enable)
     {
@@ -473,6 +471,18 @@ void bleaio_Timeout(UINT32 count)
     {
         bleaio_checktimetrigger();
     }
+
+    // ADC0
+    bleaio_analoginput(0, adc_readVoltage(7));
+
+    // ADC1
+    bleaio_analoginput(1, adc_readVoltage(6));
+
+    // ADC 2
+    bleaio_analoginput(2, adc_readVoltage(1));
+
+    // Battery
+    ble_trace1("Vbat %d", adc_readVoltage(20));
 }
 
 void bleaio_FineTimeout(UINT32 finecount)
@@ -885,8 +895,6 @@ void bleaio_IntCb(void *data)
     UINT8 pre_button = 0;
     int i;
 
-    ble_trace0("interrupt");
-
     //Debounce
     for (i = 0; i < 5; i++) //max delay here is 1ms
     {
@@ -1151,8 +1159,10 @@ void bleaio_checktimetrigger(void)
 
     for (i = 0; i < AIO_NOT_HANDLE_NUM_MAX; i++)
     {
+        ble_trace0("tick");
         if (bleaio_not_gatt_cfg.tick[i])
         {
+            ble_trace0("ok");
             bleaio_not_gatt_cfg.tick[i]--;
 
             if (bleaio_not_gatt_cfg.tick[i]==0)
@@ -1193,6 +1203,7 @@ void bleaio_checktimetrigger(void)
                 //send individial notification
                 if (sent==0)
                 {
+                    ble_trace0("Send individual notif");
                     bleprofile_ReadHandle(bleaio_not_gatt_cfg.hdl[i], &db_pdu);
                     ble_tracen((char *)db_pdu.pdu, db_pdu.len);
 
