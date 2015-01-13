@@ -13,8 +13,8 @@
  ******************************************************/
 
 //This GPIO definition is only used for test mode
-#define DIN0        0
-#define DIN1        2
+#define DIN0        25
+#define DIN1        24
 #define DOUT0       8
 #define DOUT1       27  // This dummy
 #define DIN_BYTE    1   // number of bytes in aggregate input
