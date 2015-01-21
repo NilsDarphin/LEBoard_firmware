@@ -23,8 +23,6 @@
 #define DIGITAL     0
 #define ANALOG      1
 
-#define ANALOG_OUTPUT_TO_INPUT
-
 #define AIO_PWM1       26
 #define AIO_PWM2       28
 #define AIO_PWM3       -1 //28
@@ -480,9 +478,6 @@ void bleaio_Timeout(UINT32 count)
 
     // ADC 2
     bleaio_analoginput(2, adc_readVoltage(1));
-
-    // Battery
-    ble_trace1("Vbat %d", adc_readVoltage(20));
 }
 
 void bleaio_FineTimeout(UINT32 finecount)
@@ -1528,10 +1523,6 @@ void bleaio_output(UINT16 handle)
                         }
                         bleaio_pwm_set(gpio, AIO_PWM_STEPS, (UINT16)set_steps);
                     }
-
-#ifdef ANALOG_OUTPUT_TO_INPUT
-                    bleaio_analoginput(count, (UINT16)output);
-#endif
                 }
             }
         }
