@@ -379,7 +379,7 @@ APPLICATION_INIT()
                    (void *)&bleaio_puart_cfg,
                    (void *)&bleaio_gpio_cfg,
                    bleaio_Create);
-    bleapp_trace_enable = BLE_TRACE_UART_HCI;
+    bleapp_trace_enable = 0;
 }
 
 UINT32 bleautoio_queryPowersave(LowPowerModePollType type, UINT32 context)
@@ -484,12 +484,8 @@ void bleaio_FineTimeout(UINT32 finecount)
 {
     char aio_char[READ_UART_LEN + 1];
 
-    //ble_trace1("Finetimer:%d", finecount);
-
     //Reading
     bleprofile_ReadUART(aio_char);
-    //ble_trace6("UART RX: %02x %02x %02x %02x %02x %02x ",
-    //      aio_char[0], aio_char[1], aio_char[2], aio_char[3], aio_char[4], aio_char[5]);
 
     if (aio_char[0] == 'D' && aio_char[1] == 'D') //download start
     {
