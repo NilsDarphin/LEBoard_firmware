@@ -15,6 +15,12 @@ NilsDarphin/LEBoard_hardware      |Schematics and design of the board (Eagle fil
 NilsDarphin/LEBoard_firmware      |Firmware of the board
 NilsDarphin/LEB_Android           |Example of Android application
 
+### Exemples of use
+
+[Control the IOs from your Android](http://www.youtube.com/watch?v=B23XFl-bA60)
+
+[Control a Car/Robot from your Android](http://www.youtube.com/watch?v=EagJ7pZ6EUM)
+
 ### What is it used for ?
 
 The LEB Project allows you to develop easily Bluetooth low energy peripherals : 
