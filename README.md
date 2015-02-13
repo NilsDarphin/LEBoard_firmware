@@ -40,7 +40,7 @@ You don't need to program the shield, everything is managed by the client (Smart
 
 * Enter WICED-Smart-SDK-1.1.0/Apps/RAM and clone this repository
 
-```
+```bash
 cd WICED-Smart-SDK-1.1.0/Apps/RAM
 git clone git@github.com:NilsDarphin/LEBoard_firmware.git
 ```
@@ -62,7 +62,7 @@ git clone git@github.com:NilsDarphin/LEBoard_firmware.git
     HEX_TO_BIN_FULL_NAME  := "$(HEX_TO_BIN_PATH)Linux32/ihex2bin"
 
 * Add execute permissions to tools included in the SDK
-```
+```bash
 sudo chmod u+x Tools/CGS/Linux64/cgs
 sudo chmod u+x Tools/ChipLoad/Linux64/ChipLoad
 sudo chmod u+x Tools/DetectAndId/Linux64/detandid
@@ -75,7 +75,7 @@ sudo chmod u+x Tools/IntelHexToBin/Linux32/ihex2bin
 ```
     
 * Make the SDK use your own version of perl (fix problems related to perl version)
-```
+```bash
 mv Tools/common/Linux64/perl Tools/common/Linux64/perl.old
 ln -s /usr/bin/perl Tools/common/Linux64/perl
     
@@ -84,7 +84,18 @@ ln -s /usr/bin/perl Tools/common/Linux32/perl
 ```
     
 * Create a new configuration folder for the project by using an existing one
-```
+```bash
 cp -R Wiced-Smart/tier2/brcm/automation_io  Wiced-Smart/tier2/brcm/LEBoard_firmware
 mv Wiced-Smart/tier2/brcm/LEBoard_firmware/bld/automation_io.cgs Wiced-Smart/tier2/brcm/LEBoard_firmware/bld/LEBoard_firmware.cgs
+```
+
+### Compilation and download
+To compile you must place yourself in the WICED-Smart-SDK-1.1.0 directory and launch make:
+```bash
+./make RAM.LEBoard_firmware-BCM920732TAG_Q32
+```
+
+To download a newly created binary you must use an USB-to-UART 3V3 cable such as the C323HD and connect it to the programmation port. Reset the board and launch the command :
+```bash
+./make RAM.LEBoard_firmware-BCM920732TAG_Q32 download UART=/dev/ttyUSB0 # Change UART to your own settings
 ```
